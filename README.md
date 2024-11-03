@@ -84,9 +84,12 @@ customLogger.info("Custom log for a specific feature")
 
 ### `Logger` Extensions
 
-Alongside `Log`, SwiftLogKit includes `Logger` extensions for easy use of common categories.
+Alongside `Log`, SwiftLogKit includes `Logger` extensions for easy use of common categories.  
+To use the Logger extensions, make sure to `import os.log`.
 
 ```swift
+import os.log
+
 Logger.default.info("General information in the default logger")
 Logger.networking.debug("Network response debug information")
 Logger.database.warning("Database-related warning")

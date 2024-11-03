@@ -1,0 +1,24 @@
+{
+  "configurations" : [
+    {
+      "id" : "C3940662-0531-4564-9DB9-9D28C80A9A80",
+      "name" : "Test Scheme Action",
+      "options" : {
+
+      }
+    }
+  ],
+  "defaultOptions" : {
+
+  },
+  "testTargets" : [
+    {
+      "target" : {
+        "containerPath" : "container:",
+        "identifier" : "SwiftLogKitTests",
+        "name" : "SwiftLogKitTests"
+      }
+    }
+  ],
+  "version" : 1
+}
