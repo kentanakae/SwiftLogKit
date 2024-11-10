@@ -1,4 +1,4 @@
-// swift-tools-version: 5.9
+// swift-tools-version: 6.0
 
 import PackageDescription
 
@@ -28,8 +28,6 @@ let package = Package(
 
 for target in package.targets {
     var settings = target.swiftSettings ?? []
-    settings.append(.enableExperimentalFeature("StrictConcurrency", .when(configuration: .debug)))
-    settings.append(.enableUpcomingFeature("ConciseMagicFile", .when(configuration: .debug)))
     settings.append(.enableUpcomingFeature("ExistentialAny", .when(configuration: .debug)))
     target.swiftSettings = settings
 }
