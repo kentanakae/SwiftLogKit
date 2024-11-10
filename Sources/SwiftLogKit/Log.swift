@@ -5,7 +5,8 @@
 //  https://github.com/kentanakae
 //
 
-import OSLog
+import Foundation
+import os.log
 
 /// Log categories for organizing and managing different log types.
 public enum Log {
