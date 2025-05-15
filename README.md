@@ -9,6 +9,7 @@ SwiftLogKit is a simple, flexible logging library for Swift, ideal for organizin
 - **Privacy Control**: Controls visibility of logs with `auto`, `public`, `private`, and `sensitive` privacy settings.
 - **Log Levels**: Manages log importance with levels like `default`, `debug`, `info`, `warning`, and `fault`.
 - **`Logger` Extension**: Provides simple extensions like `Logger.default`, `Logger.networking`, etc., for ease of use.
+- **Swift Concurrency Support**: Advanced logging for async/await operations, task tracking, and AsyncSequence.
 
 ## Requirements
 
@@ -149,6 +150,103 @@ Log.default.debug("Detailed debug information for app state")
 Log.default.info("General information about app flow")
 Log.default.warning("Warning: Potential issue in user interaction")
 Log.default.fault("Critical error encountered")
+```
+
+### Swift Concurrency Support
+
+SwiftLogKit provides comprehensive support for Swift Concurrency with specialized logging tools for asynchronous contexts.
+
+#### Task Context Logging
+
+Add task-specific context to your logs in asynchronous code:
+
+```swift
+await someAsyncFunction()
+Log.default.taskInfo("Operation completed with task context")
+```
+
+#### Async Operation Tracking
+
+Track the lifecycle of asynchronous operations with detailed timing and results:
+
+```swift
+func fetchUserData() async throws -> User {
+    let tracker = Log.networking.beginAsyncOperation("Fetch User Data")
+    
+    do {
+        let response = try await apiClient.fetchUser(id: userId)
+        tracker.complete(result: "User data retrieved")
+        return response
+    } catch {
+        tracker.fail(error)
+        throw error
+    }
+}
+```
+
+#### AsyncSequence Processing
+
+Process and log each element in an AsyncSequence:
+
+```swift
+let dataStream = someAsyncSequence()
+let results = try await Log.default.process(dataStream, 
+                                          operationName: "Process data stream") { element in
+    // Process each element
+    return transformedElement
+}
+```
+
+#### Task Group Execution
+
+Execute and log multiple tasks in parallel:
+
+```swift
+let urls = ["url1", "url2", "url3"]
+let tasks = urls.map { url in
+    { try await fetchData(from: url) }
+}
+
+let results = try await Log.networking.executeTaskGroup(
+    "Fetch multiple resources",
+    tasks: tasks
+)
+```
+
+#### Continuation Support
+
+Convert callback-based APIs to async/await with logging:
+
+```swift
+func loadImage(url: URL) async throws -> UIImage {
+    try await Log.default.withCheckedThrowingContinuation("Load image") { continuation in
+        imageLoader.load(url: url) { result in
+            switch result {
+            case .success(let image):
+                continuation.resume(returning: image)
+            case .failure(let error):
+                continuation.resume(throwing: error)
+            }
+        }
+    }
+}
+```
+
+#### Detached Tasks with Logging
+
+Create detached tasks with automatic logging:
+
+```swift
+let task = Task.detached(
+    logger: Log.default,
+    operation: "Background processing",
+    priority: .background
+) {
+    // Perform background work
+    return result
+}
+
+let result = try await task.value
 ```
 
 ## API Documentation
