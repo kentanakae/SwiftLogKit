@@ -1,7 +1,8 @@
 import Testing
 import SwiftLogKit
+import Dispatch
 
-@Suite
+@Suite("AsyncLoggingTests")
 struct AsyncLoggingTests {
     /// 非同期操作トラッカーのテスト
     @Test
@@ -26,30 +27,21 @@ struct AsyncLoggingTests {
         }.value
     }
 
-    /// 非同期シーケンス処理のテスト
-    @Test
-    func testAsyncSequenceProcessing() async throws {
-        let numbers = [1, 2, 3, 4, 5].asAsyncSequence()
-
-        let results = try await Log.default.process(
-            numbers,
-            operationName: "数値の処理"
-        ) { number in
-            return number * 2
-        }
-
-        // 結果が正しいことを確認
-        #expect(results == [2, 4, 6, 8, 10])
-    }
-
     /// タスクグループ実行のテスト
     @Test
     func testTaskGroupExecution() async throws {
-        let tasks = [
-            { await computeValue(1) },
-            { await computeValue(2) },
-            { await computeValue(3) }
-        ]
+        // 明示的にSendableタスクとして宣言
+        let task1: @Sendable () async throws -> Int = { [self] in
+            await self.computeValue(1)
+        }
+        let task2: @Sendable () async throws -> Int = { [self] in
+            await self.computeValue(2)
+        }
+        let task3: @Sendable () async throws -> Int = { [self] in
+            await self.computeValue(3)
+        }
+
+        let tasks = [task1, task2, task3]
 
         let results = try await Log.default.executeTaskGroup(
             "複数タスクの実行",
@@ -89,6 +81,30 @@ struct AsyncLoggingTests {
         tracker.fail(TestError(message: "テストエラー"))
     }
 
+    /// 非同期シーケンス処理のテスト
+    @Test
+    func testAsyncSequenceProcessing() async throws {
+        // 安全にAsyncSequenceを使うため、明示的にArrayに変換する流れを作成
+        let asyncNumbers = [1, 2, 3, 4, 5].asAsyncSequence()
+
+        // 先にAsyncSequenceの全要素を収集
+        var inputNumbers: [Int] = []
+        for await number in asyncNumbers {
+            inputNumbers.append(number)
+        }
+
+        // 収集した要素を使って処理
+        let results = try await Log.default.process(
+            inputNumbers.asAsyncSequence(),
+            operationName: "数値の処理"
+        ) { number in
+            return number * 2
+        }
+
+        // 結果が正しいことを確認
+        #expect(results == [2, 4, 6, 8, 10])
+    }
+
     // ヘルパー関数
     private func computeValue(_ value: Int) async -> Int {
         try? await Task.sleep(for: .milliseconds(Double.random(in: 10...50)))
@@ -96,16 +112,57 @@ struct AsyncLoggingTests {
     }
 }
 
+// タスク管理用Actor（グローバル定義）
+fileprivate actor TaskController {
+    private var task: Task<Void, Never>?
+
+    func setTask(_ task: Task<Void, Never>) {
+        self.task = task
+    }
+
+    func cancelTask() {
+        task?.cancel()
+        task = nil
+    }
+}
+
 // AsyncSequenceのモック実装
-extension Array {
+extension Array where Element: Sendable {
     func asAsyncSequence() -> AsyncStream<Element> {
-        AsyncStream { continuation in
-            Task {
-                for element in self {
-                    continuation.yield(element)
-                    try? await Task.sleep(for: .milliseconds(10))
+        let taskController = TaskController()
+
+        return AsyncStream<Element> { continuation in
+            // コピーを作成して、アクセスを安全にする
+            let elementsCopy = Array(self)
+
+            // AsyncStreamの終了時にタスクをキャンセル
+            continuation.onTermination = { @Sendable _ in
+                // アクタ呼び出しはasyncなのでTask内で呼び出す
+                Task {
+                    await taskController.cancelTask()
                 }
-                continuation.finish()
+            }
+
+            // タスク作成
+            let task = Task { @Sendable in
+                defer {
+                    continuation.finish()
+                }
+
+                do {
+                    for element in elementsCopy {
+                        if Task.isCancelled { break }
+                        continuation.yield(element)
+                        try await Task.sleep(for: .milliseconds(10))
+                    }
+                } catch {
+                    // エラー無視
+                }
+            }
+
+            // タスクコントローラーに登録
+            Task {
+                await taskController.setTask(task)
             }
         }
     }

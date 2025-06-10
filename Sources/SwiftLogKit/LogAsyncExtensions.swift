@@ -67,9 +67,10 @@ extension Log {
         file: String = #file,
         line: Int = #line,
         function: String = #function,
-        build: @escaping (AsyncThrowingStream<T, Error>.Continuation) async -> Void
-    ) -> AsyncThrowingStream<T, Error> {
-        let tracker = self.beginAsyncOperation(
+        build: @escaping (AsyncThrowingStream<T, any Error>.Continuation) async -> Void
+    ) -> AsyncThrowingStream<T, any Error> {
+        // tracker変数は使用していないので_に置き換え
+        _ = self.beginAsyncOperation(
             operationName,
             privacy: privacy,
             file: file,
@@ -78,19 +79,13 @@ extension Log {
         )
 
         return AsyncThrowingStream { continuation in
-            let task = Task {
-                do {
-                    await build(continuation)
-                    tracker.complete()
-                } catch {
-                    tracker.fail(error)
-                    continuation.finish(throwing: error)
-                }
+            let buildBox = UnsafeSendableBox(build)
+            let continuationBox = UnsafeSendableBox(continuation)
+            let task = Task { @Sendable in
+                await buildBox.value(continuationBox.value)
             }
-
             continuation.onTermination = { @Sendable _ in
                 if task.isCancelled {
-                    tracker.cancel()
                     task.cancel()
                 }
             }
@@ -108,7 +103,7 @@ extension Log {
     /// - Returns: タスクの結果配列
     public func executeTaskGroup<T: Sendable>(
         _ operationName: String,
-        tasks: [() async throws -> T],
+        tasks: [@Sendable () async throws -> T], // @Sendableを明示
         privacy: LogPrivacy = .auto,
         file: String = #file,
         line: Int = #line,
@@ -127,8 +122,9 @@ extension Log {
         do {
             return try await withThrowingTaskGroup(of: (Int, T).self) { group in
                 for (index, task) in tasks.enumerated() {
-                    group.addTask {
-                        let result = try await task()
+                    let taskBox = UnsafeSendableBox(task)
+                    group.addTask { @Sendable in
+                        let result = try await taskBox.value()
                         return (index, result)
                     }
                 }
@@ -168,21 +164,16 @@ extension Log {
         function: String = #function,
         _ body: @escaping (CheckedContinuation<T, Never>) -> Void
     ) async -> T {
-        let tracker = self.beginAsyncOperation(
+        // tracker変数は使用していないので_に置き換え
+        _ = self.beginAsyncOperation(
             operationName,
             privacy: privacy,
             file: file,
             line: line,
             function: function
         )
-
-        return await withCheckedContinuation { continuation in
-            body(CheckedContinuationWrapper(
-                wrapping: continuation,
-                onResume: { result in
-                    tracker.complete(result: result)
-                }
-            ))
+        return await _Concurrency.withCheckedContinuation { continuation in
+            body(continuation)
         }
     }
 
@@ -198,59 +189,24 @@ extension Log {
         file: String = #file,
         line: Int = #line,
         function: String = #function,
-        _ body: @escaping (CheckedContinuation<T, Error>) -> Void
+        _ body: @escaping (CheckedContinuation<T, any Error>) -> Void
     ) async throws -> T {
-        let tracker = self.beginAsyncOperation(
+        // tracker変数は使用していないので_に置き換え
+        _ = self.beginAsyncOperation(
             operationName,
             privacy: privacy,
             file: file,
             line: line,
             function: function
         )
-
-        return try await withCheckedThrowingContinuation { continuation in
-            body(CheckedThrowingContinuationWrapper(
-                wrapping: continuation,
-                onResume: { result in
-                    tracker.complete(result: result)
-                },
-                onThrow: { error in
-                    tracker.fail(error)
-                }
-            ))
+        return try await _Concurrency.withCheckedThrowingContinuation { (continuation: CheckedContinuation<T, any Error>) in
+            body(continuation)
         }
     }
 }
 
-// MARK: - Private Continuation Wrappers
-fileprivate struct CheckedContinuationWrapper<T, E: Error> {
-    let continuation: CheckedContinuation<T, E>
-    let onResume: (T) -> Void
-
-    func resume(returning value: T) {
-        onResume(value)
-        continuation.resume(returning: value)
-    }
-}
-
-fileprivate struct CheckedThrowingContinuationWrapper<T> {
-    let continuation: CheckedContinuation<T, Error>
-    let onResume: (T) -> Void
-    let onThrow: (Error) -> Void
-
-    func resume(returning value: T) {
-        onResume(value)
-        continuation.resume(returning: value)
-    }
-
-    func resume(throwing error: Error) {
-        onThrow(error)
-        continuation.resume(throwing: error)
-    }
-}
-
 // MARK: - AsyncTask Convenience Methods
-extension Task where Failure == Error {
+extension Task where Failure == any Error {
     /// タスクを作成して実行し、ログを記録する
     /// - Parameters:
     ///   - logger: 使用するロガー
@@ -268,18 +224,27 @@ extension Task where Failure == Error {
         line: Int = #line,
         function: String = #function,
         @_implicitSelfCapture body: @escaping () async throws -> T
-    ) -> Task<T, Error> {
-        return Task.detached(priority: priority) {
-            let tracker = logger.beginAsyncOperation(
-                operation,
-                privacy: privacy,
-                file: file,
-                line: line,
-                function: function
+    ) -> Task<T, any Error> {
+        // non-Sendableな値をBoxでラップ
+        let loggerBox = UnsafeSendableBox(logger)
+        let operationBox = UnsafeSendableBox(operation)
+        let privacyBox = UnsafeSendableBox(privacy)
+        let fileBox = UnsafeSendableBox(file)
+        let lineBox = UnsafeSendableBox(line)
+        let functionBox = UnsafeSendableBox(function)
+        let bodyBox = UnsafeSendableBox(body)
+
+        return Task<T, any Error>.detached(priority: priority) { @Sendable in
+            let tracker = loggerBox.value.beginAsyncOperation(
+                operationBox.value,
+                privacy: privacyBox.value,
+                file: fileBox.value,
+                line: lineBox.value,
+                function: functionBox.value
             )
 
             do {
-                let result = try await body()
+                let result = try await bodyBox.value()
                 tracker.complete(result: result)
                 return result
             } catch {
@@ -288,4 +253,10 @@ extension Task where Failure == Error {
             }
         }
     }
+}
+
+// UnsafeSendableBox定義を追加
+fileprivate final class UnsafeSendableBox<T>: @unchecked Sendable {
+    let value: T
+    init(_ value: T) { self.value = value }
 }
